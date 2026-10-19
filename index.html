@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>GPS 签到</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;
+margin:0;padding:16px;padding-bottom:40px;background:#0d1117;color:#e6edf3;-webkit-text-size-adjust:100%}
+h1{font-size:20px;margin:0 0 2px;font-weight:600}
+.sub{color:#8b949e;font-size:12px;margin-bottom:16px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:12px}
+#st{padding:12px 14px;border-radius:10px;background:#161b22;margin-bottom:14px;font-weight:600;
+border-left:3px solid #1f6feb;font-size:14px;transition:.2s}
+#st.ok{border-color:#238636;color:#3fb950;background:#0d1f14}
+#st.bad{border-color:#da3633;color:#f85149;background:#1f0d0d}
+#st.wait{border-color:#d29922;color:#d29922;background:#1f1a0d}
+button{background:#21262d;color:#e6edf3;border:1px solid #30363d;padding:13px 16px;border-radius:8px;
+margin:0 8px 8px 0;font-size:15px;font-weight:500;cursor:pointer;transition:.12s;font-family:inherit}
+button:active{transform:scale(.97);background:#30363d}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.p{background:#1f6feb;border-color:#1f6feb;color:#fff}
+button.g{background:#238636;border-color:#238636;color:#fff}
+#qr{text-align:center;padding:8px 0}
+#qr img{width:200px;height:200px;background:#fff;padding:10px;border-radius:10px;display:none}
+#qr img.on{display:inline-block}
+pre{background:#010409;padding:12px;border-radius:8px;max-height:260px;overflow:auto;
+font-size:12px;white-space:pre-wrap;word-break:break-all;line-height:1.55;margin:0;
+border:1px solid #21262d;font-family:ui-monospace,Menlo,Consolas,monospace}
+label{display:block;font-size:12px;color:#8b949e;margin:8px 0 4px}
+input{background:#0d1117;color:#e6edf3;border:1px solid #30363d;padding:10px;border-radius:6px;
+width:100%;font-size:14px;font-family:inherit}
+input:focus{outline:none;border-color:#1f6feb}
+details{margin-top:8px}
+summary{cursor:pointer;color:#8b949e;font-size:13px;padding:8px 0;user-select:none}
+.hint{font-size:11px;color:#6e7681;margin-top:6px;line-height:1.5}
+</style></head><body>
+
+<h1>GPS 签到</h1>
+<div class="sub">单文件客户端 · 双击即用</div>
+
+<div id="st">就绪</div>
+
+<div class="card">
+  <button class="p" id="b1" onclick="doQR()">1 · 获取二维码</button>
+  <button id="b2" onclick="doScan()">2 · 等待扫码</button>
+  <button class="g" id="b3" onclick="doAuto()">3 · 自动签到</button>
+  <button id="b4" onclick="doHist()">4 · 历史</button>
+  <button id="b5" onclick="doState()">5 · 状态</button>
+</div>
+
+<div id="qr"><img id="qrimg" alt="二维码"></div>
+<div class="card"><pre id="log">点「获取二维码」，然后用微信扫。</pre></div>
+
+<details><summary>设置</summary>
+<label>接口地址</label>
+<input id="api" value="https://gps-punch-lealmmcepj.cn-hangzhou.fcapp.run">
+<label>课程 ID</label>
+<input id="course" value="134211">
+<label>访问口令（服务端配了才填）</label>
+<input id="token" placeholder="留空则不带">
+<div class="hint">cookie 存在本浏览器 localStorage。服务端无状态，会话状态全由本页携带。</div>
+</details>
+
+<script>
+(function(){"use strict";
+var $=function(i){return document.getElementById(i)};
+var LS=window.localStorage;
+var JAR=LS.getItem("gp_jar")||"";
+var SID=LS.getItem("gp_sid")||(function(){var s="w"+Math.random().toString(36).slice(2,10);LS.setItem("gp_sid",s);return s})();
+
+function log(m){
+  var e=$("log");
+  if(e.textContent.indexOf("点")===0)e.textContent="";
+  e.textContent+=(e.textContent?"\n":"")+m;
+  e.scrollTop=e.scrollHeight;
+}
+function setSt(t,c){var e=$("st");e.textContent=t;e.className=c||""}
+function busy(i,on){$(i).disabled=!!on}
+function base(){return ($("api").value||"").replace(/\/+$/,"")}
+function qs(extra){
+  var p="?sid="+encodeURIComponent(SID)+"&course="+encodeURIComponent($("course").value);
+  if(JAR)p+="&jar="+encodeURIComponent(JAR);
+  var tk=$("token").value.trim();
+  if(tk)p+="&t="+encodeURIComponent(tk);
+  if(extra)p+="&"+extra;
+  return p;
+}
+function call(path,extra){
+  return fetch(base()+path+qs(extra),{method:"GET"}).then(function(r){
+    return r.text().then(function(t){
+      var d;
+      try{d=JSON.parse(t)}catch(e){throw new Error("返回不是 JSON（HTTP "+r.status+"）："+t.slice(0,120))}
+      if(d.jarB64){JAR=d.jarB64;LS.setItem("gp_jar",JAR)}
+      return d;
+    });
+  });
+}
+function errText(d){
+  if(!d)return "无响应";
+  var s=d.err||"未知错误";
+  if(d.needLogin)s+="（需要重新扫码）";
+  if(d.rateLimited)s+="（已被限流）";
+  if(d.cooldown)s+="（冷却中）";
+  return s;
+}
+window.doQR=function(){
+  busy("b1",true);setSt("正在拉取二维码…","wait");log("→ GET /qr");
+  call("/qr").then(function(d){
+    if(!d.ok){log("✗ "+errText(d));setSt("获取失败","bad");return}
+    $("qrimg").src="https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket="+encodeURIComponent(d.ticket);
+    $("qrimg").className="on";
+    log("✓ 二维码已生成");
+    log("  ticket: "+d.ticket.slice(0,32)+"…");
+    setSt("请用微信扫码","ok");
+    window.doScan();
+  }).catch(function(e){log("✗ "+e.message);setSt("网络错误","bad")})
+    .then(function(){busy("b1",false)});
+};
+
+var scanning=false;
+window.doScan=function(){
+  if(scanning)return;
+  scanning=true;busy("b2",true);setSt("等待扫码中…","wait");log("→ GET /scan（最多 25 秒）");
+  call("/scan").then(function(d){
+    if(!d.ok){log("✗ "+errText(d));setSt("轮询失败","bad");return}
+    if(d.landing)log("✓ 扫码成功，已跟进落地页");
+    else log("· 超时，未检测到扫码（轮询 "+(d.polls||0)+" 次）");
+    return call("/state").then(function(s){
+      if(s.ok){
+        log("会话: "+s.text);
+        setSt(s.alive?"已登录":"未登录",s.alive?"ok":"bad");
+        if(s.alive)$("qrimg").className="";
+      }
+    });
+  }).catch(function(e){log("✗ "+e.message);setSt("网络错误","bad")})
+    .then(function(){busy("b2",false);scanning=false});
+};
+window.doState=function(){
+  setSt("查询会话…","wait");log("→ GET /state");
+  call("/state").then(function(d){
+    if(!d.ok){log("✗ "+errText(d));setSt("失败","bad");return}
+    log("会话: "+d.text);
+    setSt(d.alive?"已登录":"未登录",d.alive?"ok":"bad");
+  }).catch(function(e){log("✗ "+e.message);setSt("网络错误","bad")});
+};
+
+window.doHist=function(){
+  setSt("读取历史…","wait");log("→ GET /list?op=ed");
+  call("/list","op=ed").then(function(d){
+    if(!d.ok){
+      log("✗ "+errText(d));
+      setSt(d.needLogin?"未登录":"失败","bad");
+      if(d.needLogin)log("提示: 先点「1 获取二维码」扫码");
+      return;
+    }
+    log("历史 "+d.count+" 条：");
+    (d.items||[]).forEach(function(it){
+      log("  "+(it.beginAt||"")+"  "+(it.title||"")+"  "+(it.status||"")+"  "+(it.signed||""));
+    });
+    setSt("历史 "+d.count+" 条","ok");
+  }).catch(function(e){log("✗ "+e.message);setSt("网络错误","bad")});
+};
+window.doAuto=function(){
+  busy("b3",true);setSt("自动签到中…","wait");log("→ GET /auto");
+  call("/auto").then(function(d){
+    (d.log||[]).forEach(log);
+    if(!d.ok){
+      log("✗ "+errText(d));
+      if(d.needLogin){
+        setSt("未登录，请先扫码","bad");
+        log("提示: 先点「1 获取二维码」，微信扫码后再点这里");
+      } else if(d.cooldown) setSt("冷却中","wait");
+      else setSt("失败","bad");
+      return;
+    }
+    if(d.already){setSt("今天已经签过了","ok");return}
+    if(d.success){setSt("✓ 签到成功","ok");log("✓ "+(d.verdict||""))}
+    else{setSt("未成功","bad");log("✗ "+(d.verdict||"服务端未确认"))}
+    if(d.confirmed)log("回查: "+d.confirmed);
+  }).catch(function(e){log("✗ "+e.message);setSt("网络错误","bad")})
+    .then(function(){busy("b3",false)});
+};
+
+$("course").addEventListener("change",function(){LS.setItem("gp_course",this.value)});
+$("api").addEventListener("change",function(){LS.setItem("gp_api",this.value)});
+$("token").addEventListener("change",function(){LS.setItem("gp_token",this.value)});
+if(LS.getItem("gp_course"))$("course").value=LS.getItem("gp_course");
+if(LS.getItem("gp_api"))$("api").value=LS.getItem("gp_api");
+if(LS.getItem("gp_token"))$("token").value=LS.getItem("gp_token");
+
+log("接口: "+base());
+log("会话 ID: "+SID);
+log("");
+log("提示: 若打开地址时浏览器直接下载了文件，把下载下来的 HTML 双击打开即可正常使用。");
+})();
+</script></body></html>
